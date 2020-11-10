@@ -60,13 +60,16 @@ semaforoA, semaforoB;
 TIM_MATCHCFG_Type MatchTCFG;
 
 uint8_t sendBuffer[BUFFER_LIMIT];
+uint8_t receiveBuffer[BUFFER_LIMIT];
+
 /*
-    sentBuffer Indica dónde esta el inicio del próximo paquete a transmitir en sendBuffer
-    Ejemplo: sentBuffer[20] indica q se debe transmitir desde sendBuffer[20] hasta sendBuffer[35]
-    sentBuffer = 0 indica que ya se puede transmitir
-    sentBuffer = BUFFER_LIMIT indica que no hay nada que transmitir
+    sentBufferPtr Indica dónde esta el inicio del próximo paquete a transmitir en sendBuffer
+    Ejemplo: sentBufferPtr[20] indica q se debe transmitir desde sendBuffer[20] hasta sendBuffer[35]
+    sentBufferPtr = 0 indica que ya se puede transmitir
+    sentBufferPtr = BUFFER_LIMIT indica que no hay nada que transmitir
 */
-uint8_t sentBuffer = BUFFER_LIMIT;
+uint8_t sentBufferPtr = BUFFER_LIMIT;
+uint8_t receivedBufferPtr = BUFFER_LIMIT;
 
 
 void confPin(struct Semaforo * , struct Semaforo * );
@@ -99,7 +102,7 @@ int main(void) {
     uint8_t inicial[] = "TP3-FCEFyN\n\r";
     UART_Send(LPC_UART1, inicial, sizeof(inicial), NONE_BLOCKING);
     strcpy(sendBuffer,"Hola este es un ejemplo de una linea de texto muy larga. \n\r bla blabla \n\r sdesfsdf");
-    sentBuffer = 0;
+    sentBufferPtr = 0;
     while (1) {
 
     }
@@ -413,42 +416,64 @@ void UART1_IRQHandler(void){
     if ((tmp == UART_IIR_INTID_RDA)){
         UART_IntReceive();
     }
-    if (tmp == UART_IIR_INTID_THRE && sentBuffer < BUFFER_LIMIT){
+    if (tmp == UART_IIR_INTID_THRE && sentBufferPtr < BUFFER_LIMIT){
         UART_IntSend();
     }
     return;
 }
 
 void UART_IntReceive() {
+    uint8_t info[1] = "";
+    UART_Receive(LPC_UART1, info, sizeof(info), NONE_BLOCKING);
 
+    if (receivedBufferPtr == BUFFER_LIMIT) {
+        receivedBufferPtr = 0;
+    }
+    if (info[0] == '\r') {
+        // El usuario mando un "enter"
+        info[0] = '\0';
+        receiveBuffer[receivedBufferPtr] = info[0];
+        receivedBufferPtr = BUFFER_LIMIT; // Resteo el buffer
+    }
+    else {
+        receiveBuffer[receivedBufferPtr] = info[0];
+    }
+
+
+    if (receivedBufferPtr >= BUFFER_LIMIT) {
+        receivedBufferPtr = BUFFER_LIMIT;
+    }
+    else {
+        receivedBufferPtr++;
+    }
 }
 void UART_IntSend() {
     uint32_t buffer_len = 0;
     /*
-     * Supongamos sentBuffer = 195, BUFFER_LIMIT = 200
-     * sentBuffer + UART_TX_FIFO_SIZE = 195+16 = 211
+     * Supongamos sentBufferPtr = 195, BUFFER_LIMIT = 200
+     * sentBufferPtr + UART_TX_FIFO_SIZE = 195+16 = 211
      * Tengo que enviar desde la posicion 195 hasta la 200 nomás
      * buffer_len = 200-195 = 5
      */
-    if (sentBuffer + UART_TX_FIFO_SIZE > BUFFER_LIMIT) {
-        buffer_len = BUFFER_LIMIT - sentBuffer;
+    if (sentBufferPtr + UART_TX_FIFO_SIZE > BUFFER_LIMIT) {
+        buffer_len = BUFFER_LIMIT - sentBufferPtr;
     }
     else buffer_len = UART_TX_FIFO_SIZE;
 
     uint8_t deberia_terminar = 0;
-    for (uint8_t i = sentBuffer; i<buffer_len+sentBuffer; i++) {
+    for (uint8_t i = sentBufferPtr; i<buffer_len+sentBufferPtr; i++) {
         if (sendBuffer[i] == '\0') {
-            buffer_len = i-sentBuffer;
+            buffer_len = i-sentBufferPtr;
             deberia_terminar = 1;
         }
     }
-    uint8_t* sendptr =  sendBuffer + sentBuffer;
+    uint8_t* sendptr =  sendBuffer + sentBufferPtr;
     UART_Send(LPC_UART1, sendptr, buffer_len, NONE_BLOCKING);
     if (deberia_terminar) {
-        sentBuffer = BUFFER_LIMIT;
+        sentBufferPtr = BUFFER_LIMIT;
     }
     else {
-        sentBuffer+=buffer_len;
+        sentBufferPtr+=buffer_len;
     }
 
 }
