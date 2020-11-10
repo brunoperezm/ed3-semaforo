@@ -15,11 +15,13 @@
 #include "lpc17xx_pinsel.h"
 
 #include "LPC17xx.h"
+#include "string.h"
 
 #include <cr_section_macros.h>
 
 
 #define BITN(x)(1 << x)
+#define BUFFER_LIMIT 200
 
 /*
             Sem 1     --  Sem 2
@@ -56,11 +58,25 @@ struct Semaforo {
 semaforoA, semaforoB;
 
 TIM_MATCHCFG_Type MatchTCFG;
+
+uint8_t sendBuffer[BUFFER_LIMIT];
+/*
+    sentBuffer Indica dónde esta el inicio del próximo paquete a transmitir en sendBuffer
+    Ejemplo: sentBuffer[20] indica q se debe transmitir desde sendBuffer[20] hasta sendBuffer[35]
+    sentBuffer = 0 indica que ya se puede transmitir
+    sentBuffer = BUFFER_LIMIT indica que no hay nada que transmitir
+*/
+uint8_t sentBuffer = BUFFER_LIMIT;
+
+
 void confPin(struct Semaforo * , struct Semaforo * );
 void apagarSemaforos(struct Semaforo * , struct Semaforo * );
 void confTIMER0(void);
 void confTIMER1(void);
 void confADC();
+void confUART();
+void UART_IntReceive();
+void UART_IntSend();
 
 int main(void) {
 
@@ -79,6 +95,11 @@ int main(void) {
     ConfIntExt();
     confTIMER1();
     confADC();
+    confUart();
+    uint8_t inicial[] = "TP3-FCEFyN\n\r";
+    UART_Send(LPC_UART1, inicial, sizeof(inicial), NONE_BLOCKING);
+    strcpy(sendBuffer,"Hola este es un ejemplo de una linea de texto muy larga. \n\r bla blabla \n\r sdesfsdf");
+    sentBuffer = 0;
     while (1) {
 
     }
@@ -139,6 +160,19 @@ void confPin(struct Semaforo * semaforoA, struct Semaforo * semaforoB) {
     PinCfg.Portnum = 2;
 
     PINSEL_ConfigPin( & PinCfg);
+
+
+    /* ------------ Configuramos pint para uart1 ------------ */
+    PINSEL_CFG_Type PinUART1Cfg;
+    //configuración pin de Tx y Rx
+    PinUART1Cfg.Funcnum = 1;
+    PinUART1Cfg.OpenDrain = 0;
+    PinUART1Cfg.Pinmode = 0;
+    PinUART1Cfg.Pinnum = 15;
+    PinUART1Cfg.Portnum = 0;
+    PINSEL_ConfigPin(&PinUART1Cfg);
+    PinUART1Cfg.Pinnum = 16;
+    PINSEL_ConfigPin(&PinUART1Cfg);
 
     return;
 }
@@ -334,4 +368,87 @@ void apagarSemaforos(struct Semaforo * semaforoA, struct Semaforo * semaforoB) {
     confSemaforoB |= BITN(semaforoB -> pin_verde);
     GPIO_ClearValue(semaforoA -> puerto, confSemaforoA);
     GPIO_ClearValue(semaforoB -> puerto, confSemaforoB);
+}
+
+void confUart(void){
+    UART_CFG_Type UARTConfigStruct;
+    UART_FIFO_CFG_Type UARTFIFOConfigStruct;
+    //configuración por defecto:
+    UART_ConfigStructInit(&UARTConfigStruct);
+    //inicializa periférico
+    UART_Init(LPC_UART1, &UARTConfigStruct);
+    UART_FIFOConfigStructInit(&UARTFIFOConfigStruct);
+    //Inicializa FIFO
+    UART_FIFOConfig(LPC_UART1, &UARTFIFOConfigStruct);
+    //Habilita transmisión
+    UART_TxCmd(LPC_UART1, ENABLE);
+    //Habilita interrucpción Tx
+    UART_IntConfig(LPC_UART1, UART_INTCFG_THRE, ENABLE);
+    // Habilita interrupción por el RX del UART
+    UART_IntConfig(LPC_UART1, UART_INTCFG_RBR, ENABLE);
+    // Habilita interrupción por el estado de la linea UART
+    UART_IntConfig(LPC_UART1, UART_INTCFG_RLS, ENABLE);
+    //NVIC_SetPriority(UART1_IRQn, ((0x01<<3)|0x01));
+    //Habilita interrupción por UART1
+    NVIC_EnableIRQ(UART1_IRQn);
+return;
+}
+
+void UART1_IRQHandler(void){
+    uint32_t intsrc, tmp, tmp1;
+    //Determina la fuente de interrupción
+    intsrc = UART_GetIntId(LPC_UART1);
+    tmp = intsrc & UART_IIR_INTID_MASK;
+    // Evalúa Line Status
+    if (tmp == UART_IIR_INTID_RLS){
+    tmp1 = UART_GetLineStatus(LPC_UART1);
+    tmp1 &= (UART_LSR_OE | UART_LSR_PE | UART_LSR_FE \
+    | UART_LSR_BI | UART_LSR_RXFE);
+    // ingresa a un Loop infinito si hay error
+    if (tmp1) {
+        while(1){};
+    }
+    }
+    // Receive Data Available or Character time-out
+    if ((tmp == UART_IIR_INTID_RDA)){
+        UART_IntReceive();
+    }
+    if (tmp == UART_IIR_INTID_THRE && sentBuffer < BUFFER_LIMIT){
+        UART_IntSend();
+    }
+    return;
+}
+
+void UART_IntReceive() {
+
+}
+void UART_IntSend() {
+    uint32_t buffer_len = 0;
+    /*
+     * Supongamos sentBuffer = 195, BUFFER_LIMIT = 200
+     * sentBuffer + UART_TX_FIFO_SIZE = 195+16 = 211
+     * Tengo que enviar desde la posicion 195 hasta la 200 nomás
+     * buffer_len = 200-195 = 5
+     */
+    if (sentBuffer + UART_TX_FIFO_SIZE > BUFFER_LIMIT) {
+        buffer_len = BUFFER_LIMIT - sentBuffer;
+    }
+    else buffer_len = UART_TX_FIFO_SIZE;
+
+    uint8_t deberia_terminar = 0;
+    for (uint8_t i = sentBuffer; i<buffer_len+sentBuffer; i++) {
+        if (sendBuffer[i] == '\0') {
+            buffer_len = i-sentBuffer;
+            deberia_terminar = 1;
+        }
+    }
+    uint8_t* sendptr =  sendBuffer + sentBuffer;
+    UART_Send(LPC_UART1, sendptr, buffer_len, NONE_BLOCKING);
+    if (deberia_terminar) {
+        sentBuffer = BUFFER_LIMIT;
+    }
+    else {
+        sentBuffer+=buffer_len;
+    }
+
 }
