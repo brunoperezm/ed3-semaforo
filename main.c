@@ -48,11 +48,13 @@ uint32_t secuencia_Tiempo_ciego[4] = {
     5,
     15,
     10};
-uint32_t Intensidad[4] = {
-    1000,
-    2000,
-    4000,
-    5000};
+
+typedef enum
+{
+    ESTADO_NORMAL,
+    ESTADO_TENUE,
+    ESTADO_ROTO
+} EstadoLeds;
 
 struct Semaforo
 {
@@ -63,6 +65,9 @@ struct Semaforo
     uint8_t pin_amarillo;
 
     uint8_t pin_verde;
+    EstadoLeds ledRojo;
+    EstadoLeds ledVerde;
+    EstadoLeds ledAmarillo;
 } semaforoA, semaforoB;
 
 TIM_MATCHCFG_Type MatchTCFG;
@@ -95,8 +100,8 @@ typedef enum
                    //usando los tiempos de semaforo del arreglo secuencia_Tiempo_normal
     CONFIGURANDO,  // Está en modo configuración, amarillo titilando,
     AMBULANCIA_S1, // Deja en verde a semáforo S1
-    AMBULANCIA_S2,  // Deja en verde a semáforo S2,
-    CIEGO // Da prioridad al semaforo S1
+    AMBULANCIA_S2, // Deja en verde a semáforo S2,
+    CIEGO          // Da prioridad al semaforo S1
 } ModoFuncionamiento;
 
 ModoFuncionamiento modo_funcionamiento = NORMAL;
@@ -133,8 +138,9 @@ int main(void)
     confPin(&semaforoA, &semaforoB);
     confTIMER0();
     ConfIntExt();
-    confTIMER1();
     confADC();
+    confTIMER1();
+
     confUart();
     enviarTextoInicial();
     while (1)
@@ -191,6 +197,10 @@ void confPin(struct Semaforo *semaforoA, struct Semaforo *semaforoB)
     PinCfgADC.Funcnum = 1;                       //funcion 1 --> AD0.0 --> canal 0 del ADC
     PinCfgADC.Pinmode = PINSEL_PINMODE_TRISTATE; //ni pull up ni pull down
     PinCfgADC.OpenDrain = PINSEL_PINMODE_NORMAL; //No opendrain
+    PINSEL_ConfigPin(&PinCfgADC);
+    PinCfgADC.Pinnum = 24; //pin 24
+    PINSEL_ConfigPin(&PinCfgADC);
+    PinCfgADC.Pinnum = 25; //pin 25
     PINSEL_ConfigPin(&PinCfgADC);
 
     /*---------------------- Configuramos pin para EINT0 ----------------------*/
@@ -278,9 +288,9 @@ void TIMER0_IRQHandler(void)
      * P0.4-> AMARILLO DE SEMAFORO 2
      * P0.5-> VERDE DE SEMAFORO 2
      */
-    if ( modo_funcionamiento == NORMAL ||
-         modo_funcionamiento == CONFIGURANDO ||
-         modo_funcionamiento == CIEGO)
+    if (modo_funcionamiento == NORMAL ||
+        modo_funcionamiento == CONFIGURANDO ||
+        modo_funcionamiento == CIEGO)
     {
         apagarSemaforos(&semaforoA, &semaforoB);
     }
@@ -357,7 +367,8 @@ void TIMER0_IRQHandler(void)
     }
     else
     {
-        if (modo_funcionamiento == CIEGO) {
+        if (modo_funcionamiento == CIEGO)
+        {
             modo_funcionamiento = NORMAL;
         }
         secuencia = 0; //VUELVE AL ESTADO 0  SEMAFORO 1: ROJO SEMAFORO 2: VERDE
@@ -410,19 +421,23 @@ void TIMER1_IRQHandler(void)
     {
         GPIO_SetValue(0, 1 << 22);
     }
+    ADC_StartCmd(LPC_ADC, ADC_START_NOW);
     TIM_ClearIntPending(LPC_TIM1, TIM_MR0_INT);
 }
 
 void confADC()
 {
 
-    ADC_Init(LPC_ADC, 200000);                 //FRECUENCIA DE TRABAJO del ADC. determinar cuando tiene que convertir el ADC
-    ADC_BurstCmd(LPC_ADC, 0);                  //Modo START, NO burst
-    ADC_ChannelCmd(LPC_ADC, 0, ENABLE);        //activación de canal 0
-    ADC_IntConfig(LPC_ADC, ADC_ADINTEN0, SET); //activo interrupción para canal 0
-    ADC_EdgeStartConfig(LPC_ADC, ADC_START_ON_RISING);
+    ADC_Init(LPC_ADC, 200000); //FRECUENCIA DE TRABAJO del ADC. determinar cuando tiene que convertir el ADC
+    ADC_BurstCmd(LPC_ADC, 0);  //Modo START, NO burst
+    //ADC_ChannelCmd(LPC_ADC, ADC_CHANNEL_0, ENABLE);        //activación de canal 0
+    //ADC_ChannelCmd(LPC_ADC, ADC_CHANNEL_1, ENABLE);        //activación de canal 1
+    ADC_ChannelCmd(LPC_ADC, ADC_CHANNEL_2, ENABLE); //activación de canal 2
+    //ADC_IntConfig(LPC_ADC, ADC_ADINTEN0, SET); //activo interrupción para canal 0
+    //ADC_IntConfig(LPC_ADC, ADC_ADINTEN1, SET); //activo interrupción para canal 1
+    ADC_IntConfig(LPC_ADC, ADC_ADINTEN2, SET); //activo interrupción para canal 2
+    //ADC_EdgeStartConfig(LPC_ADC, ADC_START_ON_RISING);
     // Va a usar el P0.23 como entrada del ADC
-    ADC_StartCmd(LPC_ADC, ADC_START_ON_MAT10); // La conversion va a iniciar cuando se produzca el match 0 del timer 1
 
     NVIC_EnableIRQ(ADC_IRQn); //habilitamos interrupciones por adc
 }
@@ -432,18 +447,55 @@ void ADC_IRQHandler(void)
 
     static uint16_t ADC0Value = 0; //variable para alamcenar el valor de la conversion del ADC
     ADC0Value = ((LPC_ADC->ADDR0) >> 4) & 0XFFF;
-    //esto es suponiendo que cada luz esta conformada por 3 leds
-    if (ADC0Value < 1365)
+
+    static uint16_t ADC1Value = 0; //variable para alamcenar el valor de la conversion del ADC
+    ADC1Value = ((LPC_ADC->ADDR1) >> 4) & 0XFFF;
+
+    static uint16_t ADC2Value = 0; //variable para alamcenar el valor de la conversion del ADC
+    ADC2Value = ((LPC_ADC->ADDR2) >> 4) & 0XFFF;
+
+    // LED VERDE
+    if (ADC0Value < 3600 && ADC0Value > 2500) // 3600 es el máximo valor que llega con la res de 1k
     {
-        //inidcar que se deben encender los 3 leds
+        semaforoA.ledVerde = ESTADO_NORMAL;
     }
-    if (ADC0Value >= 1365 && ADC0Value <= 1365)
+    else if (ADC0Value <= 2500 && ADC0Value > 1500)
     {
-        //indicar que se dene encender 2 leds
+
+        semaforoA.ledVerde = ESTADO_TENUE;
     }
     else
     {
-        //inidicar que se deben encender 1 led
+        semaforoA.ledVerde = ESTADO_TENUE;
+    }
+
+    // LED AMARILLO
+    if (ADC1Value < 3600 && ADC1Value > 2500) // 3600 es el máximo valor que llega con la res de 1k
+    {
+        semaforoA.ledAmarillo = ESTADO_NORMAL;
+    }
+    else if (ADC1Value <= 2500 && ADC1Value > 1500)
+    {
+
+        semaforoA.ledAmarillo = ESTADO_TENUE;
+    }
+    else
+    {
+        semaforoA.ledAmarillo = ESTADO_TENUE;
+    }
+    // LED ROJO
+    if (ADC2Value < 3600 && ADC2Value > 2500) // 3600 es el máximo valor que llega con la res de 1k
+    {
+        semaforoA.ledRojo = ESTADO_NORMAL;
+    }
+    else if (ADC2Value <= 2500 && ADC2Value > 1500)
+    {
+
+        semaforoA.ledRojo = ESTADO_TENUE;
+    }
+    else
+    {
+        semaforoA.ledRojo = ESTADO_TENUE;
     }
 }
 
@@ -788,24 +840,79 @@ void print_current_config()
     UART_Send(LPC_UART1, text, strlen(text), BLOCKING);
     switch (prev_funcionamiento)
     {
-        case NORMAL:
-            text = "MODO NORMAL";
-            break;
-        case CONFIGURANDO:
-            text = "CONFIGURANDO";
-            break;
-        case AMBULANCIA_S1:
-            text = "AMBULANCIA S1";
-            break;
-        case AMBULANCIA_S2:
-            text = "AMBULANCIA S2";
-            break;
-        case CIEGO:
-            text = "PRIORIDAD CIEGO";
-            break;
+    case NORMAL:
+        text = "MODO NORMAL";
+        break;
+    case CONFIGURANDO:
+        text = "CONFIGURANDO";
+        break;
+    case AMBULANCIA_S1:
+        text = "AMBULANCIA S1";
+        break;
+    case AMBULANCIA_S2:
+        text = "AMBULANCIA S2";
+        break;
+    case CIEGO:
+        text = "PRIORIDAD CIEGO";
+        break;
     }
     UART_Send(LPC_UART1, text, strlen(text), BLOCKING);
     text = "\n\r";
     UART_Send(LPC_UART1, text, strlen(text), BLOCKING);
 
+    text = "Estado Leds Semaforo A:\n\r";
+    UART_Send(LPC_UART1, text, strlen(text), BLOCKING);
+    text = "Verde:\n\r";
+    UART_Send(LPC_UART1, text, strlen(text), BLOCKING);
+    switch (semaforoA.ledVerde)
+    {
+    case ESTADO_NORMAL:
+        text = "ESTADO NORMAL";
+        break;
+    case ESTADO_TENUE:
+        text = "TENUE: posiblemente requiera mantenimiento";
+        break;
+    case ESTADO_ROTO:
+        text = "ROTO: luz no se ve, requiere cambio inmediato";
+        break;
+    }
+    UART_Send(LPC_UART1, text, strlen(text), BLOCKING);
+    text = "\n\r";
+    UART_Send(LPC_UART1, text, strlen(text), BLOCKING);
+
+    text = "Amarillo:\n\r";
+    UART_Send(LPC_UART1, text, strlen(text), BLOCKING);
+    switch (semaforoA.ledAmarillo)
+    {
+    case ESTADO_NORMAL:
+        text = "ESTADO NORMAL";
+        break;
+    case ESTADO_TENUE:
+        text = "TENUE: posiblemente requiera mantenimiento";
+        break;
+    case ESTADO_ROTO:
+        text = "ROTO: luz no se ve, requiere cambio inmediato";
+        break;
+    }
+    UART_Send(LPC_UART1, text, strlen(text), BLOCKING);
+    text = "\n\r";
+    UART_Send(LPC_UART1, text, strlen(text), BLOCKING);
+
+    text = "Rojo:\n\r";
+    UART_Send(LPC_UART1, text, strlen(text), BLOCKING);
+    switch (semaforoA.ledRojo)
+    {
+    case ESTADO_NORMAL:
+        text = "ESTADO NORMAL";
+        break;
+    case ESTADO_TENUE:
+        text = "TENUE: posiblemente requiera mantenimiento";
+        break;
+    case ESTADO_ROTO:
+        text = "ROTO: luz no se ve, requiere cambio inmediato";
+        break;
+    }
+    UART_Send(LPC_UART1, text, strlen(text), BLOCKING);
+    text = "\n\r";
+    UART_Send(LPC_UART1, text, strlen(text), BLOCKING);
 }
