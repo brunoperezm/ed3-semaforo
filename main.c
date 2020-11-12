@@ -43,6 +43,11 @@ uint32_t secuencia_Tiempo_configurando[4] = {
     1,
     1,
     1};
+uint32_t secuencia_Tiempo_ciego[4] = {
+    15,
+    5,
+    15,
+    10};
 uint32_t Intensidad[4] = {
     1000,
     2000,
@@ -80,7 +85,8 @@ typedef enum
     ERROR_ARGUMENTO_FUERA_DE_RANGO,
     COMANDO_AMBULANCIA_1,
     COMANDO_AMBULANCIA_2,
-    COMANDO_MODO_NORMAL
+    COMANDO_MODO_NORMAL,
+    COMANDO_EXIT // Sale de configuracion y vuelve al modo anterior
 } EntradaResult;
 
 typedef enum
@@ -89,39 +95,17 @@ typedef enum
                    //usando los tiempos de semaforo del arreglo secuencia_Tiempo_normal
     CONFIGURANDO,  // Está en modo configuración, amarillo titilando,
     AMBULANCIA_S1, // Deja en verde a semáforo S1
-    AMBULANCIA_S2  // Deja en verde a semáforo S2
+    AMBULANCIA_S2,  // Deja en verde a semáforo S2,
+    CIEGO // Da prioridad al semaforo S1
 } ModoFuncionamiento;
 
 ModoFuncionamiento modo_funcionamiento = NORMAL;
+ModoFuncionamiento prev_funcionamiento = NORMAL;
 
 EntradaResult parseEntrada(uint8_t *entrada);
 void printEntradaResult(EntradaResult result);
 void handleComandoResult(EntradaResult result);
-/*
-    Bienviendo a Semaforo 1.0
-    Para entrar en modo configuración ingrese
-    $ conf
-    Para salir de modo configuración ingrese
-    $ exit
-    Comandos:
-    $ {s1|s2} {tiempo rojo} {tiempo amarillo} {tiempo verde}
-    $ read_config
-    $ ambulancia {s1|s2}
-*/
 
-/*
-$ s1 2000 300 5 14\r
-$ s2 200 300 5 14\r
-$ read_config\r
-*/
-
-/*
-    sentBufferPtr Indica dónde esta el inicio del próximo paquete a transmitir en sendBuffer
-    Ejemplo: sentBufferPtr[20] indica q se debe transmitir desde sendBuffer[20] hasta sendBuffer[35]
-    sentBufferPtr = 0 indica que ya se puede transmitir
-    sentBufferPtr = BUFFER_LIMIT indica que no hay nada que transmitir
-*/
-uint8_t sentBufferPtr = BUFFER_LIMIT;
 uint8_t receivedBufferPtr = BUFFER_LIMIT;
 
 void confPin(struct Semaforo *, struct Semaforo *);
@@ -294,14 +278,16 @@ void TIMER0_IRQHandler(void)
      * P0.4-> AMARILLO DE SEMAFORO 2
      * P0.5-> VERDE DE SEMAFORO 2
      */
-    if (modo_funcionamiento == NORMAL || modo_funcionamiento == CONFIGURANDO)
+    if ( modo_funcionamiento == NORMAL ||
+         modo_funcionamiento == CONFIGURANDO ||
+         modo_funcionamiento == CIEGO)
     {
         apagarSemaforos(&semaforoA, &semaforoB);
     }
     switch (secuencia)
     {
     case 0:
-        if (modo_funcionamiento == NORMAL)
+        if (modo_funcionamiento == NORMAL || modo_funcionamiento == CIEGO)
         {
             GPIO_SetValue(semaforoA.puerto, BITN(semaforoA.pin_rojo));  //P0.0-> ROJO DE SEMAFORO 1
             GPIO_SetValue(semaforoB.puerto, BITN(semaforoB.pin_verde)); //P0.5-> VERDE DE SEMAFORO 2
@@ -314,7 +300,7 @@ void TIMER0_IRQHandler(void)
         break;
 
     case 1:
-        if (modo_funcionamiento == NORMAL)
+        if (modo_funcionamiento == NORMAL || modo_funcionamiento == CIEGO)
         {
             GPIO_SetValue(semaforoA.puerto, BITN(semaforoA.pin_amarillo)); // P0.1-> AMARILLO DE SEMAFORO 1
             GPIO_SetValue(semaforoB.puerto, BITN(semaforoB.pin_amarillo)); // P0.4-> AMARILLO DE SEMAFORO 2
@@ -326,7 +312,7 @@ void TIMER0_IRQHandler(void)
 
         break;
     case 2:
-        if (modo_funcionamiento == NORMAL)
+        if (modo_funcionamiento == NORMAL || modo_funcionamiento == CIEGO)
         {
             GPIO_SetValue(semaforoA.puerto, BITN(semaforoA.pin_verde)); //P0.2-> VERDE DE SEMAFORO 1
             GPIO_SetValue(semaforoB.puerto, BITN(semaforoB.pin_rojo));  //P0.3-> ROJO DE SEMAFORO 2
@@ -340,7 +326,7 @@ void TIMER0_IRQHandler(void)
         break;
 
     case 3:
-        if (modo_funcionamiento == NORMAL)
+        if (modo_funcionamiento == NORMAL || modo_funcionamiento == CIEGO)
         {
 
             GPIO_SetValue(semaforoA.puerto, BITN(semaforoA.pin_amarillo)); //P0.1-> AMARILLO DE SEMAFORO 1
@@ -361,12 +347,19 @@ void TIMER0_IRQHandler(void)
     {
         TIM_UpdateMatchValue(LPC_TIM0, 0, secuencia_Tiempo_configurando[secuencia]);
     }
+    else if (modo_funcionamiento == CIEGO)
+    {
+        TIM_UpdateMatchValue(LPC_TIM0, 0, secuencia_Tiempo_ciego[secuencia]);
+    }
     if (secuencia < 3)
     {
         secuencia++;
     }
     else
     {
+        if (modo_funcionamiento == CIEGO) {
+            modo_funcionamiento = NORMAL;
+        }
         secuencia = 0; //VUELVE AL ESTADO 0  SEMAFORO 1: ROJO SEMAFORO 2: VERDE
     }
 
@@ -377,11 +370,9 @@ void TIMER0_IRQHandler(void)
 void EINT0_IRQHandler(void)
 {
 
-    secuencia_Tiempo_normal[0] = 2;
-    secuencia_Tiempo_normal[1] = 1;
-    secuencia_Tiempo_normal[2] = 2;
-    secuencia_Tiempo_normal[3] = 1;
-
+    secuencia = 1; // Pone en amarillo para pasar verde al SEM 2
+    modo_funcionamiento = CIEGO;
+    TIMER0_IRQHandler();
     EXTI_ClearEXTIFlag(0); // limpia bandera
 }
 void confTIMER1(void)
@@ -432,7 +423,6 @@ void confADC()
     ADC_EdgeStartConfig(LPC_ADC, ADC_START_ON_RISING);
     // Va a usar el P0.23 como entrada del ADC
     ADC_StartCmd(LPC_ADC, ADC_START_ON_MAT10); // La conversion va a iniciar cuando se produzca el match 0 del timer 1
-    LPC_ADC->ADCR |= BITN(26) | BITN(25);
 
     NVIC_EnableIRQ(ADC_IRQn); //habilitamos interrupciones por adc
 }
@@ -486,8 +476,6 @@ void confUart(void)
     UART_FIFOConfig(LPC_UART1, &UARTFIFOConfigStruct);
     //Habilita transmisión
     UART_TxCmd(LPC_UART1, ENABLE);
-    //Habilita interrucpción Tx
-    UART_IntConfig(LPC_UART1, UART_INTCFG_THRE, ENABLE);
     // Habilita interrupción por el RX del UART
     UART_IntConfig(LPC_UART1, UART_INTCFG_RBR, ENABLE);
     // Habilita interrupción por el estado de la linea UART
@@ -521,10 +509,6 @@ void UART1_IRQHandler(void)
     if ((tmp == UART_IIR_INTID_RDA))
     {
         UART_IntReceive();
-    }
-    if (tmp == UART_IIR_INTID_THRE && sentBufferPtr < BUFFER_LIMIT)
-    {
-        UART_IntSend();
     }
     return;
 }
@@ -561,42 +545,7 @@ void UART_IntReceive()
         receivedBufferPtr++;
     }
 }
-void UART_IntSend()
-{
-    uint32_t buffer_len = 0;
-    /*
-     * Supongamos sentBufferPtr = 195, BUFFER_LIMIT = 200
-     * sentBufferPtr + UART_TX_FIFO_SIZE = 195+16 = 211
-     * Tengo que enviar desde la posicion 195 hasta la 200 nomás
-     * buffer_len = 200-195 = 5
-     */
-    if (sentBufferPtr + UART_TX_FIFO_SIZE > BUFFER_LIMIT)
-    {
-        buffer_len = BUFFER_LIMIT - sentBufferPtr;
-    }
-    else
-        buffer_len = UART_TX_FIFO_SIZE;
 
-    uint8_t deberia_terminar = 0;
-    for (uint8_t i = sentBufferPtr; i < buffer_len + sentBufferPtr; i++)
-    {
-        if (sendBuffer[i] == '\0')
-        {
-            buffer_len = i - sentBufferPtr;
-            deberia_terminar = 1;
-        }
-    }
-    uint8_t *sendptr = sendBuffer + sentBufferPtr;
-    UART_Send(LPC_UART1, sendptr, buffer_len, NONE_BLOCKING);
-    if (deberia_terminar)
-    {
-        sentBufferPtr = BUFFER_LIMIT;
-    }
-    else
-    {
-        sentBufferPtr += buffer_len;
-    }
-}
 /*
  * Interpreta
  */
@@ -681,6 +630,10 @@ EntradaResult parseEntrada(uint8_t *entrada)
     {
         return COMANDO_MODO_NORMAL;
     }
+    if (strcmp(entrada, "exit") == 0)
+    {
+        return COMANDO_EXIT;
+    }
     return ERROR_COMANDO_NO_ENCONTRADO;
 }
 
@@ -729,6 +682,10 @@ void printEntradaResult(EntradaResult result)
         msg = "- Ambulancia Semaforo 2\r\n";
         UART_Send(LPC_UART1, msg, strlen(msg), BLOCKING);
         break;
+    case COMANDO_EXIT:
+        msg = "- Exit, vuelve a modo anterior\r\n";
+        UART_Send(LPC_UART1, msg, strlen(msg), BLOCKING);
+        break;
     default:
         break;
     }
@@ -742,6 +699,10 @@ void handleComandoResult(EntradaResult result)
         text = "No esta en modo configuracion\n\rPara ello ingrese $conf";
         UART_Send(LPC_UART1, text, strlen(text), BLOCKING);
         return;
+    }
+    if (result == COMANDO_CONFIGURACION)
+    {
+        prev_funcionamiento = modo_funcionamiento;
     }
     printEntradaResult(result);
     switch (result)
@@ -781,6 +742,10 @@ void handleComandoResult(EntradaResult result)
         GPIO_SetValue(semaforoA.puerto, BITN(semaforoA.pin_rojo));
         modo_funcionamiento = AMBULANCIA_S2;
         break;
+    case COMANDO_EXIT:
+        modo_funcionamiento = prev_funcionamiento;
+        TIMER0_IRQHandler();
+        break;
     }
 }
 /**
@@ -798,7 +763,9 @@ void enviarTextoInicial()
         "$ sem {tiempo rojo/verde} {tiempo amarillo}\n\r"
         "$ read_config\n\r"
         "$ modo_normal\n\r"
-        "$ ambulancia {s1|s2}\n\r";
+        "$ ambulancia {s1|s2}\n\r"
+        "Para volver al modo anterior y salir de configuracion\n\r"
+        "$ exit\n\r";
     UART_Send(LPC_UART1, inicial, sizeof(inicial), BLOCKING);
 }
 
@@ -817,4 +784,28 @@ void print_current_config()
     UART_Send(LPC_UART1, buffer1, strlen(buffer1), BLOCKING);
     text = "\n\r";
     UART_Send(LPC_UART1, text, strlen(text), BLOCKING);
+    text = "Modo de funcionamiento: ";
+    UART_Send(LPC_UART1, text, strlen(text), BLOCKING);
+    switch (prev_funcionamiento)
+    {
+        case NORMAL:
+            text = "MODO NORMAL";
+            break;
+        case CONFIGURANDO:
+            text = "CONFIGURANDO";
+            break;
+        case AMBULANCIA_S1:
+            text = "AMBULANCIA S1";
+            break;
+        case AMBULANCIA_S2:
+            text = "AMBULANCIA S2";
+            break;
+        case CIEGO:
+            text = "PRIORIDAD CIEGO";
+            break;
+    }
+    UART_Send(LPC_UART1, text, strlen(text), BLOCKING);
+    text = "\n\r";
+    UART_Send(LPC_UART1, text, strlen(text), BLOCKING);
+
 }
