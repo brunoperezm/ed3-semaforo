@@ -72,7 +72,6 @@ struct Semaforo
 
 TIM_MATCHCFG_Type MatchTCFG;
 
-uint8_t sendBuffer[BUFFER_LIMIT];
 uint8_t receiveBuffer[BUFFER_LIMIT];
 
 uint32_t intencion_cambio_rojo_verde = 0;
@@ -580,8 +579,8 @@ void UART_IntReceive()
         info[0] = '\0';
         receiveBuffer[receivedBufferPtr] = info[0];
         receivedBufferPtr = BUFFER_LIMIT; // Resteo el buffer
-        EntradaResult result = parseEntrada(receiveBuffer);
-        handleComandoResult(result);
+        EntradaResult result = parseEntrada(receiveBuffer); // Interpretación de entrada
+        handleComandoResult(result); // Acción de la entrada
     }
     else
     {
@@ -599,7 +598,7 @@ void UART_IntReceive()
 }
 
 /*
- * Interpreta
+ * Interpreta la entrada y devuelve un EntradaResult
  */
 
 EntradaResult parseEntrada(uint8_t *entrada)
@@ -616,6 +615,7 @@ EntradaResult parseEntrada(uint8_t *entrada)
         char buffer[BUFFER_LIMIT];
         strcpy(buffer, entrada);
 
+        // strtok divide la cadena con el delimitador " "
         uint8_t *token = strtok(buffer, " ");
         uint8_t *endptr;
         uint8_t cont = 0;
@@ -629,7 +629,8 @@ EntradaResult parseEntrada(uint8_t *entrada)
         while (token != NULL)
         {
 
-            int32_t val = strtol(token, &endptr, 10);
+            // strtol es para transformar una cadena a un número
+            int32_t val = strtol(token, &endptr, 10); 
 
             if (endptr == token || *endptr != '\0')
             {
@@ -748,7 +749,7 @@ void handleComandoResult(EntradaResult result)
     if (result != COMANDO_CONFIGURACION && modo_funcionamiento != CONFIGURANDO)
     {
         uint8_t *text;
-        text = "No esta en modo configuracion\n\rPara ello ingrese $conf";
+        text = "No esta en modo configuracion\n\rPara ello ingrese $conf\n\r";
         UART_Send(LPC_UART1, text, strlen(text), BLOCKING);
         return;
     }
