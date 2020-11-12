@@ -429,13 +429,9 @@ void confADC()
 
     ADC_Init(LPC_ADC, 200000); //FRECUENCIA DE TRABAJO del ADC. determinar cuando tiene que convertir el ADC
     ADC_BurstCmd(LPC_ADC, 0);  //Modo START, NO burst
-    //ADC_ChannelCmd(LPC_ADC, ADC_CHANNEL_0, ENABLE);        //activación de canal 0
-    //ADC_ChannelCmd(LPC_ADC, ADC_CHANNEL_1, ENABLE);        //activación de canal 1
+    
     ADC_ChannelCmd(LPC_ADC, ADC_CHANNEL_2, ENABLE); //activación de canal 2
-    //ADC_IntConfig(LPC_ADC, ADC_ADINTEN0, SET); //activo interrupción para canal 0
-    //ADC_IntConfig(LPC_ADC, ADC_ADINTEN1, SET); //activo interrupción para canal 1
     ADC_IntConfig(LPC_ADC, ADC_ADINTEN2, SET); //activo interrupción para canal 2
-    //ADC_EdgeStartConfig(LPC_ADC, ADC_START_ON_RISING);
     // Va a usar el P0.23 como entrada del ADC
 
     NVIC_EnableIRQ(ADC_IRQn); //habilitamos interrupciones por adc
