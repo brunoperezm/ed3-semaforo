@@ -420,6 +420,7 @@ void TIMER1_IRQHandler(void)
     {
         GPIO_SetValue(0, 1 << 22);
     }
+
     ADC_StartCmd(LPC_ADC, ADC_START_NOW);
     TIM_ClearIntPending(LPC_TIM1, TIM_MR0_INT);
 }
@@ -427,11 +428,15 @@ void TIMER1_IRQHandler(void)
 void confADC()
 {
 
-    ADC_Init(LPC_ADC, 200000); //FRECUENCIA DE TRABAJO del ADC. determinar cuando tiene que convertir el ADC
-    ADC_BurstCmd(LPC_ADC, 0);  //Modo START, NO burst
-    
+    ADC_Init(LPC_ADC, 2500);  //FRECUENCIA DE TRABAJO del ADC. determinar cuando tiene que convertir el ADC
+    ADC_BurstCmd(LPC_ADC, 0); //Modo START, NO burst
+    //ADC_ChannelCmd(LPC_ADC, ADC_CHANNEL_0, ENABLE);        //activación de canal 0
+    //ADC_ChannelCmd(LPC_ADC, ADC_CHANNEL_1, ENABLE);        //activación de canal 1
     ADC_ChannelCmd(LPC_ADC, ADC_CHANNEL_2, ENABLE); //activación de canal 2
+    //ADC_IntConfig(LPC_ADC, ADC_ADINTEN0, SET); //activo interrupción para canal 0
+    //ADC_IntConfig(LPC_ADC, ADC_ADINTEN1, SET); //activo interrupción para canal 1
     ADC_IntConfig(LPC_ADC, ADC_ADINTEN2, SET); //activo interrupción para canal 2
+    //ADC_EdgeStartConfig(LPC_ADC, ADC_START_ON_RISING);
     // Va a usar el P0.23 como entrada del ADC
 
     NVIC_EnableIRQ(ADC_IRQn); //habilitamos interrupciones por adc
@@ -449,48 +454,24 @@ void ADC_IRQHandler(void)
     static uint16_t ADC2Value = 0; //variable para alamcenar el valor de la conversion del ADC
     ADC2Value = ((LPC_ADC->ADDR2) >> 4) & 0XFFF;
 
-    // LED VERDE
-    if (ADC0Value < 3600 && ADC0Value > 2500) // 3600 es el máximo valor que llega con la res de 1k
-    {
-        semaforoA.ledVerde = ESTADO_NORMAL;
-    }
-    else if (ADC0Value <= 2500 && ADC0Value > 1500)
-    {
-
-        semaforoA.ledVerde = ESTADO_TENUE;
-    }
-    else
-    {
-        semaforoA.ledVerde = ESTADO_TENUE;
-    }
-
-    // LED AMARILLO
-    if (ADC1Value < 3600 && ADC1Value > 2500) // 3600 es el máximo valor que llega con la res de 1k
-    {
-        semaforoA.ledAmarillo = ESTADO_NORMAL;
-    }
-    else if (ADC1Value <= 2500 && ADC1Value > 1500)
-    {
-
-        semaforoA.ledAmarillo = ESTADO_TENUE;
-    }
-    else
-    {
-        semaforoA.ledAmarillo = ESTADO_TENUE;
-    }
-    // LED ROJO
     if (ADC2Value < 3600 && ADC2Value > 2500) // 3600 es el máximo valor que llega con la res de 1k
     {
+        semaforoA.ledAmarillo = ESTADO_NORMAL;
+        semaforoA.ledVerde = ESTADO_NORMAL;
         semaforoA.ledRojo = ESTADO_NORMAL;
     }
     else if (ADC2Value <= 2500 && ADC2Value > 1500)
     {
 
+        semaforoA.ledAmarillo = ESTADO_TENUE;
+        semaforoA.ledVerde = ESTADO_TENUE;
         semaforoA.ledRojo = ESTADO_TENUE;
     }
     else
     {
-        semaforoA.ledRojo = ESTADO_TENUE;
+        semaforoA.ledAmarillo = ESTADO_ROTO;
+        semaforoA.ledVerde = ESTADO_ROTO;
+        semaforoA.ledRojo = ESTADO_ROTO;
     }
 }
 
@@ -574,9 +555,9 @@ void UART_IntReceive()
         // El usuario mando un "enter"
         info[0] = '\0';
         receiveBuffer[receivedBufferPtr] = info[0];
-        receivedBufferPtr = BUFFER_LIMIT; // Resteo el buffer
+        receivedBufferPtr = BUFFER_LIMIT;                   // Resteo el buffer
         EntradaResult result = parseEntrada(receiveBuffer); // Interpretación de entrada
-        handleComandoResult(result); // Acción de la entrada
+        handleComandoResult(result);                        // Acción de la entrada
     }
     else
     {
@@ -626,7 +607,7 @@ EntradaResult parseEntrada(uint8_t *entrada)
         {
 
             // strtol es para transformar una cadena a un número
-            int32_t val = strtol(token, &endptr, 10); 
+            int32_t val = strtol(token, &endptr, 10);
 
             if (endptr == token || *endptr != '\0')
             {
