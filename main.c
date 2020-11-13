@@ -428,15 +428,10 @@ void TIMER1_IRQHandler(void)
 void confADC()
 {
 
-    ADC_Init(LPC_ADC, 2500);  //FRECUENCIA DE TRABAJO del ADC. determinar cuando tiene que convertir el ADC
-    ADC_BurstCmd(LPC_ADC, 0); //Modo START, NO burst
-    //ADC_ChannelCmd(LPC_ADC, ADC_CHANNEL_0, ENABLE);        //activación de canal 0
-    //ADC_ChannelCmd(LPC_ADC, ADC_CHANNEL_1, ENABLE);        //activación de canal 1
-    ADC_ChannelCmd(LPC_ADC, ADC_CHANNEL_2, ENABLE); //activación de canal 2
-    //ADC_IntConfig(LPC_ADC, ADC_ADINTEN0, SET); //activo interrupción para canal 0
-    //ADC_IntConfig(LPC_ADC, ADC_ADINTEN1, SET); //activo interrupción para canal 1
-    ADC_IntConfig(LPC_ADC, ADC_ADINTEN2, SET); //activo interrupción para canal 2
-    //ADC_EdgeStartConfig(LPC_ADC, ADC_START_ON_RISING);
+    ADC_Init(LPC_ADC, 2500);                        //FRECUENCIA DE TRABAJO del ADC. determinar cuando tiene que convertir el ADC
+    ADC_BurstCmd(LPC_ADC, 0);                       //Modo START, NO burst
+    ADC_ChannelCmd(LPC_ADC, ADC_CHANNEL_0, ENABLE); //activación de canal 0
+    ADC_IntConfig(LPC_ADC, ADC_ADINTEN0, SET);      //activo interrupción para canal 0
     // Va a usar el P0.23 como entrada del ADC
 
     NVIC_EnableIRQ(ADC_IRQn); //habilitamos interrupciones por adc
@@ -445,27 +440,61 @@ void confADC()
 void ADC_IRQHandler(void)
 { //cada vez que convierta vamos a decidir cuantos leds de cada luz se deben encender
 
-    static uint16_t ADC2Value = 0; //variable para alamcenar el valor de la conversion del ADC
-    ADC2Value = ((LPC_ADC->ADDR2) >> 4) & 0XFFF;
-
-    if (ADC2Value < 3600 && ADC2Value > 2500) // 3600 es el máximo valor que llega con la res de 1k
+    uint8_t canal_que_interrumpio = ((LPC_ADC->ADGDR) >> 24) & 0b111;
+    uint8_t proximo_canal = 0;
+    uint16_t adc_value = 0; //variable para alamcenar el valor de la conversion del ADC
+    switch (canal_que_interrumpio)
     {
-        semaforoA.ledAmarillo = ESTADO_NORMAL;
-        semaforoA.ledVerde = ESTADO_NORMAL;
-        semaforoA.ledRojo = ESTADO_NORMAL;
+    case 0: // Interrumpio canal 0
+        adc_value = ((LPC_ADC->ADDR0) >> 4) & 0XFFF;
+        proximo_canal = 0b10; // Canal 1
+        break;
+    case 1: // Interrumpio canal 1
+        adc_value = ((LPC_ADC->ADDR1) >> 4) & 0XFFF;
+        proximo_canal = 0b100; // Canal 2
+        break;
+    case 2: // Interrumpio canal 2
+        adc_value = ((LPC_ADC->ADDR2) >> 4) & 0XFFF;
+        proximo_canal = 0b1; // Canal 0
+        break;
+
+    default:
+        proximo_canal = 0b1;
+        break;
     }
-    else if (ADC2Value <= 2500 && ADC2Value > 1500)
-    {
 
-        semaforoA.ledAmarillo = ESTADO_TENUE;
-        semaforoA.ledVerde = ESTADO_TENUE;
-        semaforoA.ledRojo = ESTADO_TENUE;
+    LPC_ADC->ADCR &= ~(0x7F);       // Pongo en cero el AD0CR[0:7] para borrar los canales activados
+    LPC_ADC->ADCR |= proximo_canal; // Pongo en cero el AD0CR[0:7] para borrar los canales activados
+
+    // Obtengo el nuevo estado
+    EstadoLeds estadoLed;
+    if (adc_value < 4096 && adc_value > 2500)
+    {
+        estadoLed = ESTADO_NORMAL;
+    }
+    else if (adc_value <= 2500 && adc_value > 500)
+    {
+        estadoLed = ESTADO_TENUE;
     }
     else
     {
-        semaforoA.ledAmarillo = ESTADO_ROTO;
-        semaforoA.ledVerde = ESTADO_ROTO;
-        semaforoA.ledRojo = ESTADO_ROTO;
+        estadoLed = ESTADO_ROTO;
+    }
+
+    // Canal 0, osea LED VERDE
+    if (canal_que_interrumpio == 0)
+    {
+        semaforoA.ledVerde = estadoLed;
+    }
+    // Canal 1, osea LED ROJO
+    else if (canal_que_interrumpio == 1)
+    {
+        semaforoA.ledRojo = estadoLed;
+    }
+    // Canal 2, osea LED AMARILLO
+    else if (canal_que_interrumpio == 2)
+    {
+        semaforoA.ledAmarillo = estadoLed;
     }
 }
 
@@ -832,7 +861,7 @@ void print_current_config()
 
     text = "Estado Leds Semaforo A:\n\r";
     UART_Send(LPC_UART1, text, strlen(text), BLOCKING);
-    text = "Verde:\n\r";
+    text = "Verde: ";
     UART_Send(LPC_UART1, text, strlen(text), BLOCKING);
     switch (semaforoA.ledVerde)
     {
@@ -850,7 +879,7 @@ void print_current_config()
     text = "\n\r";
     UART_Send(LPC_UART1, text, strlen(text), BLOCKING);
 
-    text = "Amarillo:\n\r";
+    text = "Amarillo: ";
     UART_Send(LPC_UART1, text, strlen(text), BLOCKING);
     switch (semaforoA.ledAmarillo)
     {
@@ -868,7 +897,7 @@ void print_current_config()
     text = "\n\r";
     UART_Send(LPC_UART1, text, strlen(text), BLOCKING);
 
-    text = "Rojo:\n\r";
+    text = "Rojo: ";
     UART_Send(LPC_UART1, text, strlen(text), BLOCKING);
     switch (semaforoA.ledRojo)
     {
