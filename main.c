@@ -445,12 +445,6 @@ void confADC()
 void ADC_IRQHandler(void)
 { //cada vez que convierta vamos a decidir cuantos leds de cada luz se deben encender
 
-    static uint16_t ADC0Value = 0; //variable para alamcenar el valor de la conversion del ADC
-    ADC0Value = ((LPC_ADC->ADDR0) >> 4) & 0XFFF;
-
-    static uint16_t ADC1Value = 0; //variable para alamcenar el valor de la conversion del ADC
-    ADC1Value = ((LPC_ADC->ADDR1) >> 4) & 0XFFF;
-
     static uint16_t ADC2Value = 0; //variable para alamcenar el valor de la conversion del ADC
     ADC2Value = ((LPC_ADC->ADDR2) >> 4) & 0XFFF;
 
@@ -528,9 +522,7 @@ void UART1_IRQHandler(void)
         // ingresa a un Loop infinito si hay error
         if (tmp1)
         {
-            while (1)
-            {
-            };
+            // Hay un error, por ahora no hacemos nada
         }
     }
     // Receive Data Available or Character time-out
