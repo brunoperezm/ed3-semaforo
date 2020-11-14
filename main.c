@@ -23,6 +23,7 @@
 
 #define BITN(x) (1 << x)
 #define BUFFER_LIMIT 200
+#define PWMPRESCALE (25 - 1) //25 PCLK cycles to increment TC by 1 i.e. 1 Micro-second
 
 /*
             Sem 1     --  Sem 2
@@ -34,10 +35,10 @@
 uint8_t secuencia = 0;
 uint8_t intencidad = 0; //que es el indice del vector intencidad
 uint32_t secuencia_Tiempo_normal[4] = {
-    10,
-    5,
-    10,
-    5};
+    1,
+    1,
+    1,
+    1};
 uint32_t secuencia_Tiempo_configurando[4] = {
     1,
     1,
@@ -76,6 +77,12 @@ uint8_t receiveBuffer[BUFFER_LIMIT];
 
 uint32_t intencion_cambio_rojo_verde = 0;
 uint32_t intencion_cambio_amarillo = 0;
+enum Intensidad
+{
+    NULA,
+    MEDIA,
+    ALTA
+} intensidad;
 
 typedef enum
 {
@@ -112,7 +119,7 @@ void handleComandoResult(EntradaResult result);
 
 uint8_t receivedBufferPtr = BUFFER_LIMIT;
 
-void confPin(struct Semaforo *, struct Semaforo *);
+void confPin();
 void apagarSemaforos(struct Semaforo *, struct Semaforo *);
 void confTIMER0(void);
 void confTIMER1(void);
@@ -120,26 +127,28 @@ void confADC();
 void confUART();
 void UART_IntReceive();
 void UART_IntSend();
+void initPWM(void);
+void updatePulseWidth(uint8_t semNumber, enum Intensidad);
 
 int main(void)
 {
 
     semaforoA.puerto = 2;
-    semaforoA.pin_rojo = 2;
-    semaforoA.pin_amarillo = 3;
-    semaforoA.pin_verde = 4;
+    semaforoA.pin_rojo = 0;
+    semaforoA.pin_amarillo = 1;
+    semaforoA.pin_verde = 2;
 
     semaforoB.puerto = 2;
-    semaforoB.pin_rojo = 5;
-    semaforoB.pin_amarillo = 6;
-    semaforoB.pin_verde = 7;
-
-    confPin(&semaforoA, &semaforoB);
+    semaforoB.pin_rojo = 3;
+    semaforoB.pin_amarillo = 4;
+    semaforoB.pin_verde = 5;
+    intensidad = MEDIA;
+    confPin();
     confTIMER0();
     ConfIntExt();
     confADC();
     confTIMER1();
-
+    initPWM();
     confUart();
     enviarTextoInicial();
     while (1)
@@ -154,41 +163,16 @@ void confPin(struct Semaforo *semaforoA, struct Semaforo *semaforoB)
     GPIO_SetDir(0, 1 << 22, 1);
 
     /* LUCES:
-     * P2.2-> ROJO DE SEMAFORO 1
-     * P2.3-> AMARILLO DE SEMAFORO 1
-     * P2.4-> VERDE DE SEMAFORO 1
+     * P2.0-> ROJO DE SEMAFORO 1
+     * P2.1-> AMARILLO DE SEMAFORO 1
+     * P2.2-> VERDE DE SEMAFORO 1
      *
-     * P2.5-> ROJO DE SEMAFORO 2
-     * P2.6-> AMARILLO DE SEMAFORO 2
-     * P2.7-> VERDE DE SEMAFORO 2
+     * P2.3-> ROJO DE SEMAFORO 2
+     * P2.4-> AMARILLO DE SEMAFORO 2
+     * P2.5-> VERDE DE SEMAFORO 2
      */
-    // 6 SALIDAS LEDS
-    uint32_t confSemaforoA = 0x0;
-    uint32_t confSemaforoB = 0x0;
 
-    confSemaforoA |= BITN(semaforoA->pin_rojo);
-    confSemaforoA |= BITN(semaforoA->pin_amarillo);
-    confSemaforoA |= BITN(semaforoA->pin_verde);
-    if (semaforoA->puerto == semaforoB->puerto)
-    {
-        confSemaforoB = confSemaforoA;
-        confSemaforoB |= BITN(semaforoB->pin_rojo);
-        confSemaforoB |= BITN(semaforoB->pin_amarillo);
-        confSemaforoB |= BITN(semaforoB->pin_verde);
-        GPIO_SetDir(semaforoA->puerto, confSemaforoB, 1);
-        GPIO_ClearValue(semaforoA->puerto, confSemaforoA);
-    }
-    else
-    {
-        confSemaforoB |= BITN(semaforoB->pin_rojo);
-        confSemaforoB |= BITN(semaforoB->pin_amarillo);
-        confSemaforoB |= BITN(semaforoB->pin_verde);
-        GPIO_SetDir(semaforoA->puerto, confSemaforoA, 1);
-        GPIO_SetDir(semaforoB->puerto, confSemaforoB, 1);
-        GPIO_ClearValue(semaforoA->puerto, confSemaforoA);
-        GPIO_ClearValue(semaforoB->puerto, confSemaforoB);
-    }
-
+    apagarSemaforos(&semaforoA, &semaforoB);
     /*---------------------- Configuramos pines para ADC ----------------------*/
     PINSEL_CFG_Type PinCfgADC;                   //creo la estructura del canal 0 del ADC
     PinCfgADC.Portnum = 0;                       //Puerto 0
@@ -200,6 +184,8 @@ void confPin(struct Semaforo *semaforoA, struct Semaforo *semaforoB)
     PinCfgADC.Pinnum = 24; //pin 24
     PINSEL_ConfigPin(&PinCfgADC);
     PinCfgADC.Pinnum = 25; //pin 25
+    PINSEL_ConfigPin(&PinCfgADC);
+    PinCfgADC.Pinnum = 26; //pin 25
     PINSEL_ConfigPin(&PinCfgADC);
 
     /*---------------------- Configuramos pin para EINT0 ----------------------*/
@@ -225,6 +211,7 @@ void confPin(struct Semaforo *semaforoA, struct Semaforo *semaforoB)
     PinUART1Cfg.Pinnum = 16;
     PINSEL_ConfigPin(&PinUART1Cfg);
 
+    LPC_PINCON->PINSEL4 |= (1 << 0) | (1 << 2) | (1 << 4) | (1 << 6) | (1 << 8) | (1 << 10); //Select PWM1.1 output for Pin1.18
     return;
 }
 void ConfIntExt()
@@ -298,21 +285,21 @@ void TIMER0_IRQHandler(void)
     case 0:
         if (modo_funcionamiento == NORMAL || modo_funcionamiento == CIEGO)
         {
-            GPIO_SetValue(semaforoA.puerto, BITN(semaforoA.pin_rojo));  //P0.0-> ROJO DE SEMAFORO 1
-            GPIO_SetValue(semaforoB.puerto, BITN(semaforoB.pin_verde)); //P0.5-> VERDE DE SEMAFORO 2
+            updatePulseWidth(semaforoA.pin_rojo, intensidad);  //P0.0-> ROJO DE SEMAFORO 1
+            updatePulseWidth(semaforoB.pin_verde, intensidad); //P0.5-> VERDE DE SEMAFORO 2
         }
         else if (modo_funcionamiento == CONFIGURANDO)
         {
-            GPIO_SetValue(semaforoA.puerto, BITN(semaforoA.pin_amarillo)); //P0.0-> ROJO DE SEMAFORO 1
-            GPIO_SetValue(semaforoB.puerto, BITN(semaforoB.pin_amarillo)); //P0.5-> VERDE DE SEMAFORO 2
+            updatePulseWidth(semaforoA.pin_amarillo, intensidad);
+            updatePulseWidth(semaforoB.pin_amarillo, intensidad);
         }
         break;
 
     case 1:
         if (modo_funcionamiento == NORMAL || modo_funcionamiento == CIEGO)
         {
-            GPIO_SetValue(semaforoA.puerto, BITN(semaforoA.pin_amarillo)); // P0.1-> AMARILLO DE SEMAFORO 1
-            GPIO_SetValue(semaforoB.puerto, BITN(semaforoB.pin_amarillo)); // P0.4-> AMARILLO DE SEMAFORO 2
+            updatePulseWidth(semaforoA.pin_amarillo, intensidad);
+            updatePulseWidth(semaforoB.pin_amarillo, intensidad);
         }
         else if (modo_funcionamiento == CONFIGURANDO)
         {
@@ -323,13 +310,13 @@ void TIMER0_IRQHandler(void)
     case 2:
         if (modo_funcionamiento == NORMAL || modo_funcionamiento == CIEGO)
         {
-            GPIO_SetValue(semaforoA.puerto, BITN(semaforoA.pin_verde)); //P0.2-> VERDE DE SEMAFORO 1
-            GPIO_SetValue(semaforoB.puerto, BITN(semaforoB.pin_rojo));  //P0.3-> ROJO DE SEMAFORO 2
+            updatePulseWidth(semaforoA.pin_verde, intensidad);
+            updatePulseWidth(semaforoB.pin_rojo, intensidad);
         }
         else if (modo_funcionamiento == CONFIGURANDO)
         {
-            GPIO_SetValue(semaforoA.puerto, BITN(semaforoA.pin_amarillo)); //P0.0-> ROJO DE SEMAFORO 1
-            GPIO_SetValue(semaforoB.puerto, BITN(semaforoB.pin_amarillo)); //P0.5-> VERDE DE SEMAFORO 2
+            updatePulseWidth(semaforoA.pin_amarillo, intensidad);
+            updatePulseWidth(semaforoB.pin_amarillo, intensidad);
         }
 
         break;
@@ -337,9 +324,8 @@ void TIMER0_IRQHandler(void)
     case 3:
         if (modo_funcionamiento == NORMAL || modo_funcionamiento == CIEGO)
         {
-
-            GPIO_SetValue(semaforoA.puerto, BITN(semaforoA.pin_amarillo)); //P0.1-> AMARILLO DE SEMAFORO 1
-            GPIO_SetValue(semaforoB.puerto, BITN(semaforoB.pin_amarillo)); //P0.4-> AMARILLO DE SEMAFORO 2
+            updatePulseWidth(semaforoA.pin_amarillo, intensidad);
+            updatePulseWidth(semaforoB.pin_amarillo, intensidad);
         }
         else if (modo_funcionamiento == CONFIGURANDO)
         {
@@ -412,14 +398,6 @@ void confTIMER1(void)
 
 void TIMER1_IRQHandler(void)
 {
-    if (GPIO_ReadValue(0) & 1 << 22)
-    {
-        GPIO_ClearValue(0, 1 << 22);
-    }
-    else
-    {
-        GPIO_SetValue(0, 1 << 22);
-    }
 
     ADC_StartCmd(LPC_ADC, ADC_START_NOW);
     TIM_ClearIntPending(LPC_TIM1, TIM_MR0_INT);
@@ -455,7 +433,11 @@ void ADC_IRQHandler(void)
         break;
     case 2: // Interrumpio canal 2
         adc_value = ((LPC_ADC->ADDR2) >> 4) & 0XFFF;
-        proximo_canal = 0b1; // Canal 0
+        proximo_canal = 0b1000; // Canal 3
+        break;
+    case 3: // Interrumpio canal 2
+        adc_value = ((LPC_ADC->ADDR3) >> 4) & 0XFFF;
+        proximo_canal = 0b0; // Canal 0
         break;
 
     default:
@@ -496,22 +478,31 @@ void ADC_IRQHandler(void)
     {
         semaforoA.ledAmarillo = estadoLed;
     }
+    // Canal 3, el que mide intensidad
+    else if (canal_que_interrumpio == 3)
+    {
+        enum Intensidad intensidadMedida;
+        if (adc_value > 2000)
+        {
+            intensidadMedida = ALTA;
+        }
+        else
+        {
+            intensidadMedida = MEDIA;
+        }
+        intensidad = intensidadMedida;
+    }
 }
 
 void apagarSemaforos(struct Semaforo *semaforoA, struct Semaforo *semaforoB)
 {
-    uint32_t confSemaforoA = 0x0;
-    uint32_t confSemaforoB = 0x0;
-
-    confSemaforoA |= BITN(semaforoA->pin_rojo);
-    confSemaforoA |= BITN(semaforoA->pin_amarillo);
-    confSemaforoA |= BITN(semaforoA->pin_verde);
-
-    confSemaforoB |= BITN(semaforoB->pin_rojo);
-    confSemaforoB |= BITN(semaforoB->pin_amarillo);
-    confSemaforoB |= BITN(semaforoB->pin_verde);
-    GPIO_ClearValue(semaforoA->puerto, confSemaforoA);
-    GPIO_ClearValue(semaforoB->puerto, confSemaforoB);
+    LPC_PWM1->MR1 = 0;
+    LPC_PWM1->MR2 = 0;
+    LPC_PWM1->MR3 = 0;
+    LPC_PWM1->MR4 = 0;
+    LPC_PWM1->MR5 = 0;
+    LPC_PWM1->MR6 = 0;
+    LPC_PWM1->LER |= (1 << 1) | (1 << 2) | (1 << 3) | (1 << 4) | (1 << 5) | (1 << 6); //Load the MR1 new value at start of next cycle
 }
 
 void confUart(void)
@@ -784,13 +775,13 @@ void handleComandoResult(EntradaResult result)
     case COMANDO_AMBULANCIA_1:
         modo_funcionamiento = AMBULANCIA_S1;
         apagarSemaforos(&semaforoA, &semaforoB);
-        GPIO_SetValue(semaforoA.puerto, BITN(semaforoA.pin_verde));
-        GPIO_SetValue(semaforoB.puerto, BITN(semaforoB.pin_rojo));
+        updatePulseWidth(semaforoA.pin_verde, intensidad);
+        updatePulseWidth(semaforoB.pin_rojo, intensidad);
         break;
     case COMANDO_AMBULANCIA_2:
         apagarSemaforos(&semaforoA, &semaforoB);
-        GPIO_SetValue(semaforoB.puerto, BITN(semaforoB.pin_verde));
-        GPIO_SetValue(semaforoA.puerto, BITN(semaforoA.pin_rojo));
+        updatePulseWidth(semaforoB.pin_verde, intensidad);
+        updatePulseWidth(semaforoA.pin_rojo, intensidad);
         modo_funcionamiento = AMBULANCIA_S2;
         break;
     case COMANDO_EXIT:
@@ -914,4 +905,100 @@ void print_current_config()
     UART_Send(LPC_UART1, text, strlen(text), BLOCKING);
     text = "\n\r";
     UART_Send(LPC_UART1, text, strlen(text), BLOCKING);
+}
+void initPWM(void)
+{
+    /*Assuming that PLL0 has been setup with CCLK = 100Mhz and PCLK = 25Mhz.*/
+
+    //LPC_PINCON->PINSEL4 |= (1 << 0) | (1 << 2) | (1 << 4) | (1 << 6) | (1 << 8) | (1 << 10); //Select PWM1.1 output for Pin1.18
+    LPC_SC->PCONP |= (1 << 6);  // PWM on
+                                //LPC_PWM1->PCR = 0x0;                                                                     //Select Single Edge PWM - by default its single Edged so this line can be removed
+    LPC_PWM1->PR = PWMPRESCALE; //1 micro-second resolution
+    LPC_PWM1->MR0 = 1000;       //1000us = 1ms period duration
+    LPC_PWM1->MR1 = 15;         //250us - default pulse duration i.e. width
+    LPC_PWM1->MR2 = 200;
+    LPC_PWM1->MR3 = 100;
+    LPC_PWM1->MR4 = 15;
+    LPC_PWM1->MR5 = 200;
+    LPC_PWM1->MR6 = 100;
+    LPC_PWM1->MCR = (1 << 1);                                                                    //Reset PWM TC on PWM1MR0 match
+    LPC_PWM1->LER |= (1 << 0) | (1 << 1) | (1 << 2) | (1 << 3) | (1 << 4) | (1 << 5) | (1 << 6); //update values in MR0 and MR1
+    LPC_PWM1->PCR |= (1 << 9) | (1 << 10) | (1 << 11) | (1 << 12) | (1 << 13) | (1 << 14);       //enable PWM output
+    LPC_PWM1->TCR = (1 << 1);                                                                    //Reset PWM TC & PR
+
+    LPC_PWM1->TCR = (1 << 0) | (1 << 3); //enable counters and PWM Mode
+}
+
+void updatePulseWidth(uint8_t semNumber, enum Intensidad intensidad)
+{
+    if (GPIO_ReadValue(0) & 1 << 22)
+    {
+        GPIO_ClearValue(0, 1 << 22);
+    }
+    else
+    {
+        GPIO_SetValue(0, 1 << 22);
+    }
+    uint16_t duty = 0;
+    switch (semNumber)
+    {
+    case 0: // Rojo, uso valores bajos porque se ve fuerte
+        if (intensidad == NULA)
+            duty = 0;
+        else if (intensidad == MEDIA)
+            duty = 15;
+        else
+            duty = 80;
+        LPC_PWM1->MR1 = duty;
+        break;
+    case 1: // Amarillo valores bien altos
+        if (intensidad == NULA)
+            duty = 0;
+        else if (intensidad == MEDIA)
+            duty = 200;
+        else
+            duty = 1000;
+        LPC_PWM1->MR2 = duty;
+        break;
+    case 2: // Verde valores medios
+        if (intensidad == NULA)
+            duty = 0;
+        else if (intensidad == MEDIA)
+            duty = 100;
+        else
+            duty = 500;
+        LPC_PWM1->MR3 = duty;
+        break;
+    case 3:
+        if (intensidad == NULA)
+            duty = 0;
+        else if (intensidad == MEDIA)
+            duty = 15;
+        else
+            duty = 80;
+        LPC_PWM1->MR4 = duty;
+        break;
+    case 4:
+        if (intensidad == NULA)
+            duty = 0;
+        else if (intensidad == MEDIA)
+            duty = 200;
+        else
+            duty = 1000;
+        LPC_PWM1->MR5 = duty;
+        break;
+    case 5:
+        if (intensidad == NULA)
+            duty = 0;
+        else if (intensidad == MEDIA)
+            duty = 100;
+        else
+            duty = 500;
+        LPC_PWM1->MR6 = duty;
+        break;
+
+    default:
+        break;
+    }
+    LPC_PWM1->LER |= (1 << 1) | (1 << 2) | (1 << 3) | (1 << 4) | (1 << 5) | (1 << 6); //Load the MR1 new value at start of next cycle
 }
